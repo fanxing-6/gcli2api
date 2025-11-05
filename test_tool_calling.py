@@ -448,6 +448,98 @@ async def test_partial_tool_call_failure():
     print(f"   保留了文本内容和有效的工具调用\n")
 
 
+def test_function_name_normalization():
+    """测试函数名规范化转换"""
+    print("测试 10: 函数名规范化转换")
+
+    from src.openai_transfer import convert_openai_tools_to_gemini
+
+    # 测试用例：需要转换的函数名
+    normalization_cases = [
+        ("123start", "_123start", "以数字开头 -> 添加下划线前缀"),
+        ("-start", "_start", "以短横线开头 -> 添加下划线前缀"),
+        (".start", "_start", "以点开头 -> 添加下划线前缀"),
+        ("has space", "has_space", "包含空格 -> 替换为下划线"),
+        ("has@symbol", "has_symbol", "包含 @ -> 替换为下划线"),
+        ("has#hash", "has_hash", "包含 # -> 替换为下划线"),
+        ("multiple   spaces", "multiple_spaces", "多个空格 -> 合并为单个下划线"),
+        ("has__double", "has_double", "连续下划线 -> 合并为单个"),
+        ("a" * 65, "a" * 64, "超过 64 字符 -> 截断"),
+        ("", "_unnamed_function", "空字符串 -> 使用默认名称"),
+        ("_leading", "_leading", "下划线开头 -> 保持不变"),
+        ("中文函数名", "zhongwenhanshuming", "中文字符 -> 转换为拼音"),
+        ("获取天气", "huoqutianqi", "中文函数 -> 拼音转换"),
+        ("get用户info", "getyonghuinfo", "中英混合 -> 中文转拼音保留英文"),
+    ]
+
+    failed_count = 0
+    for original_name, expected_name, description in normalization_cases:
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": original_name,
+                "description": "Test function",
+                "parameters": {"type": "object"}
+            }
+        }]
+
+        try:
+            result = convert_openai_tools_to_gemini(tools)
+            assert len(result) == 1, f"应该返回 1 个工具，实际返回 {len(result)}"
+
+            actual_name = result[0]["functionDeclarations"][0]["name"]
+
+            if actual_name == expected_name:
+                print(f"   ✅ {description}")
+                print(f"      '{original_name}' -> '{actual_name}'")
+            else:
+                print(f"   ❌ {description}")
+                print(f"      期望: '{expected_name}'")
+                print(f"      实际: '{actual_name}'")
+                failed_count += 1
+        except Exception as e:
+            print(f"   ❌ 转换失败: {description}")
+            print(f"      错误: {e}")
+            failed_count += 1
+
+    # 测试用例：不需要转换的有效函数名
+    valid_names = [
+        ("get_weather", "标准命名"),
+        ("GetWeather", "驼峰命名"),
+        ("_private_function", "下划线开头"),
+        ("function_123", "包含数字"),
+        ("function.with.dots", "包含点"),
+        ("function-with-dashes", "包含短横线"),
+        ("a" * 64, "正好 64 字符"),
+    ]
+
+    for valid_name, description in valid_names:
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": valid_name,
+                "description": "Test function",
+                "parameters": {"type": "object"}
+            }
+        }]
+
+        try:
+            result = convert_openai_tools_to_gemini(tools)
+            assert len(result) == 1
+            actual_name = result[0]["functionDeclarations"][0]["name"]
+            assert actual_name == valid_name, f"有效名称不应被修改: {valid_name} -> {actual_name}"
+        except Exception as e:
+            print(f"   ❌ 有效名称处理失败: {description} - '{valid_name}'")
+            print(f"      错误: {e}")
+            failed_count += 1
+
+    if failed_count == 0:
+        print(f"✅ 函数名规范化测试通过（测试了 {len(normalization_cases)} 个转换用例和 {len(valid_names)} 个有效名称）\n")
+    else:
+        print(f"❌ 函数名规范化测试失败：{failed_count} 个测试未通过\n")
+        raise AssertionError(f"{failed_count} normalization tests failed")
+
+
 async def run_all_tests():
     """运行所有测试"""
     print("=" * 60)
@@ -467,6 +559,9 @@ async def run_all_tests():
         test_tool_message_without_name()
         await test_invalid_tool_call_arguments()
         await test_partial_tool_call_failure()
+
+        # 函数名规范化测试
+        test_function_name_normalization()
 
         print("=" * 60)
         print("✅ 所有测试通过！")

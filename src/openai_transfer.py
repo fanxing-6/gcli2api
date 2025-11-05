@@ -589,6 +589,93 @@ def extract_model_settings(model: str) -> Dict[str, Any]:
 
 # ==================== Tool Conversion Functions ====================
 
+def _normalize_function_name(name: str) -> str:
+    """
+    规范化函数名以符合 Gemini API 要求
+
+    规则：
+    - 必须以字母或下划线开头
+    - 只能包含 a-z, A-Z, 0-9, 下划线, 点, 短横线
+    - 最大长度 64 个字符
+
+    转换策略：
+    - 中文字符转换为拼音
+    - 如果以非字母/下划线开头，添加 "_" 前缀
+    - 将非法字符（空格、@、#等）替换为下划线
+    - 连续的下划线合并为一个
+    - 如果超过 64 个字符，截断
+
+    Args:
+        name: 原始函数名
+
+    Returns:
+        规范化后的函数名
+    """
+    import re
+
+    if not name:
+        return "_unnamed_function"
+
+    # 第零步：检测并转换中文字符为拼音
+    # 检查是否包含中文字符
+    if re.search(r'[\u4e00-\u9fff]', name):
+        try:
+            from pypinyin import lazy_pinyin, Style
+            # 将中文转换为拼音，用下划线连接多音字
+            parts = []
+            for char in name:
+                if '\u4e00' <= char <= '\u9fff':
+                    # 中文字符，转换为拼音
+                    pinyin = lazy_pinyin(char, style=Style.NORMAL)
+                    parts.append(''.join(pinyin))
+                else:
+                    # 非中文字符，保持不变
+                    parts.append(char)
+            normalized = ''.join(parts)
+        except ImportError:
+            log.warning("pypinyin not installed, cannot convert Chinese characters to pinyin")
+            normalized = name
+    else:
+        normalized = name
+
+    # 第一步：将非法字符替换为下划线
+    # 保留：a-z, A-Z, 0-9, 下划线, 点, 短横线
+    normalized = re.sub(r'[^a-zA-Z0-9_.\-]', '_', normalized)
+
+    # 第二步：如果以非字母/下划线开头，处理首字符
+    prefix_added = False
+    if normalized and not (normalized[0].isalpha() or normalized[0] == '_'):
+        if normalized[0] in '.-':
+            # 点和短横线在开头位置替换为下划线（它们在中间是合法的）
+            normalized = '_' + normalized[1:]
+        else:
+            # 其他字符（如数字）添加下划线前缀
+            normalized = '_' + normalized
+        prefix_added = True
+
+    # 第三步：合并连续的下划线
+    normalized = re.sub(r'_+', '_', normalized)
+
+    # 第四步：移除首尾的下划线
+    # 如果原本就是下划线开头，或者我们添加了前缀，则保留开头的下划线
+    if name.startswith('_') or prefix_added:
+        # 只移除尾部的下划线
+        normalized = normalized.rstrip('_')
+    else:
+        # 移除首尾的下划线
+        normalized = normalized.strip('_')
+
+    # 第五步：确保不为空
+    if not normalized:
+        normalized = '_unnamed_function'
+
+    # 第六步：截断到 64 个字符
+    if len(normalized) > 64:
+        normalized = normalized[:64]
+
+    return normalized
+
+
 def convert_openai_tools_to_gemini(openai_tools: List) -> List[Dict[str, Any]]:
     """
     将 OpenAI tools 格式转换为 Gemini functionDeclarations 格式
@@ -622,9 +709,21 @@ def convert_openai_tools_to_gemini(openai_tools: List) -> List[Dict[str, Any]]:
             log.warning("Tool missing 'function' field")
             continue
 
+        # 获取并规范化函数名
+        original_name = function.get("name")
+        if not original_name:
+            log.warning("Tool missing 'name' field, using default")
+            original_name = "_unnamed_function"
+
+        normalized_name = _normalize_function_name(original_name)
+
+        # 如果名称被修改了，记录日志
+        if normalized_name != original_name:
+            log.info(f"Function name normalized: '{original_name}' -> '{normalized_name}'")
+
         # 构建 Gemini function declaration
         declaration = {
-            "name": function.get("name"),
+            "name": normalized_name,
             "description": function.get("description", ""),
         }
 
